@@ -17,9 +17,9 @@ MQTT_HOST = os.getenv("EMQX_MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("EMQX_MQTT_PORT", "1883"))
 MQTT_USERNAME = os.getenv("EMQX_MQTT_USERNAME")
 MQTT_PASSWORD = os.getenv("EMQX_MQTT_PASSWORD")
-# 随机处理时间用于演示正常响应和超时，不需要通过命令行配置。
-RESPONSE_DELAY_MIN = 0.5
-RESPONSE_DELAY_MAX = 4.0
+# 收到请求后的处理时间，单位为秒。
+PROCESSING_DELAY_MIN = 0.5
+PROCESSING_DELAY_MAX = 4.0
 
 
 def validate_vin(value: str) -> str:
@@ -46,6 +46,7 @@ def parse_args():
 
 
 def on_connect(client: mqtt.Client, userdata, _flags, reason_code, _properties=None):
+    """MQTT 连接成功后订阅当前 VIN 的请求主题。"""
     if reason_code != 0:
         logging.error("MQTT connect failed: %s", reason_code)
         return
@@ -59,6 +60,7 @@ def on_connect(client: mqtt.Client, userdata, _flags, reason_code, _properties=N
 
 
 def on_message(client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
+    """读取请求属性和 payload，完成处理后发布 MQTT 5 响应。"""
     properties = message.properties
     # Response Topic 告诉客户端回复到哪里；Correlation Data 用于匹配原请求。
     response_topic = getattr(properties, "ResponseTopic", None)
@@ -73,7 +75,8 @@ def on_message(client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
     except (UnicodeDecodeError, json.JSONDecodeError):
         request = {"raw_payload": message.payload.decode("utf-8", errors="replace")}
 
-    delay = random.uniform(RESPONSE_DELAY_MIN, RESPONSE_DELAY_MAX)
+    # 处理时间超过请求的 timeout 时，HTTP API 会返回 504 TIMEOUT。
+    delay = random.uniform(PROCESSING_DELAY_MIN, PROCESSING_DELAY_MAX)
     logging.info(
         "received topic=%s correlation_data=%r payload=%s; processing %.2fs",
         message.topic,

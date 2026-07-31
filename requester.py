@@ -15,15 +15,16 @@ import requests
 EMQX_HTTP_URL = os.getenv("EMQX_HTTP_URL", "http://127.0.0.1:18083")
 REQUEST_API = f"{EMQX_HTTP_URL.rstrip('/')}/api/v5/plugin_api/emqx_sync_request/request"
 
-# 推荐使用环境变量，避免把真实 API 凭据提交到代码仓库。
+# Management API 使用 API Key 和 Secret Key 进行 HTTP Basic 认证。
 API_KEY = os.getenv("EMQX_API_KEY", "replace-with-api-key")
 SECRET_KEY = os.getenv("EMQX_SECRET_KEY", "replace-with-secret-key")
 
-# 这些是演示行为，不作为命令行参数暴露给初学者。
+# 每次请求的 timeout 为 1～5 秒；两次请求之间间隔 1 秒，共发送 10 次。
 REQUEST_TIMEOUT_MIN = 1.0
 REQUEST_TIMEOUT_MAX = 5.0
-REQUEST_INTERVAL = 1
+REQUEST_INTERVAL_SECONDS = 1
 REQUEST_COUNT = 10
+HTTP_TIMEOUT_MARGIN_SECONDS = 2
 
 
 def validate_vin(vin: str) -> str:
@@ -41,6 +42,7 @@ def validate_vin(vin: str) -> str:
 
 
 def parse_vin_list(value: str) -> list[str]:
+    """将逗号分隔的 VIN 参数转换为列表。"""
     vins = [validate_vin(vin) for vin in value.split(",") if vin.strip()]
     if not vins:
         raise argparse.ArgumentTypeError("VIN 列表不能为空")
@@ -59,6 +61,7 @@ def parse_args():
 
 
 def send_request(http: requests.Session, vin: str, timeout_seconds: float):
+    """向指定 VIN 发起一次请求，并等待 HTTP API 返回结果。"""
     request_id = uuid.uuid4().hex
     request_topic = f"/rpc/{vin}/sync_request"
     response_topic = f"/rpc/{vin}/sync_response"
@@ -86,11 +89,11 @@ def send_request(http: requests.Session, vin: str, timeout_seconds: float):
         timeout_seconds,
     )
     try:
-        # HTTP 客户端多等待 2 秒，确保能收到插件返回的 504 TIMEOUT。
+        # HTTP 连接的等待时间覆盖插件 timeout，并留出返回响应的时间。
         result = http.post(
             REQUEST_API,
             json=body,
-            timeout=timeout_seconds + 2,
+            timeout=timeout_seconds + HTTP_TIMEOUT_MARGIN_SECONDS,
         )
     except requests.RequestException as error:
         logging.error("HTTP request failed: %s", error)
@@ -137,7 +140,7 @@ def main():
             # send_request 会阻塞到 HTTP 返回，之后才会选择下一个 VIN。
             send_request(http, vin, round(timeout_seconds, 1))
             if index + 1 < REQUEST_COUNT:
-                time.sleep(REQUEST_INTERVAL)
+                time.sleep(REQUEST_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
-# Python 入门示例
+# EMQX Sync Request Python 示例
 
-这个目录用两个 Python 程序演示 `emqx_sync_request` 的完整流程：
+这两个 Python 程序展示 `emqx_sync_request` 的完整请求和响应流程：
 
 ```text
 requester.py --HTTP API--> EMQX Sync Request --MQTT 5 请求--> client.py
@@ -10,7 +10,7 @@ requester.py --HTTP API--> EMQX Sync Request --MQTT 5 请求--> client.py
 
 - `client.py` 是请求接收方。它使用 VIN 作为 MQTT Client ID，连接 MQTT 5，订阅 `/rpc/{vin}/sync_request`，读取请求中的 `Response Topic` 和 `Correlation Data`，然后把处理结果发布到 `/rpc/{vin}/sync_response`。
 - `requester.py` 是请求发起方。它通过 EMQX Management API 调用插件，依次发送 10 个请求，并打印成功响应或 timeout 等错误。
-- 每次请求的 HTTP `timeout` 会在指定范围内随机选择；接收端也会随机等待一段时间来模拟业务处理，因此可以观察成功和 `504 TIMEOUT` 两种结果。
+- 每次请求的 HTTP `timeout` 为 1～5 秒，接收端的处理时间为 0.5～4 秒。处理时间超过 timeout 时，HTTP API 返回 `504 TIMEOUT`。
 
 ## 1. 准备环境
 
@@ -36,15 +36,15 @@ sudo apt install python3-venv
 
 默认连接参数如下：
 
-| 参数 | 默认值 | 用途 |
+| 参数 | 环境变量 | 默认值 |
 | --- | --- | --- |
-| MQTT 主机 | `127.0.0.1` | 接收端连接地址 |
-| MQTT 端口 | `1883` | MQTT TCP 监听端口 |
-| HTTP 地址 | `http://127.0.0.1:18083` | EMQX Dashboard / Management API |
-| 请求主题 | `/rpc/{vin}/sync_request` | 由 VIN 决定，必须与接收端订阅主题完全一致 |
-| 响应主题 | `/rpc/{vin}/sync_response` | 由 VIN 决定 |
+| MQTT 主机 | `EMQX_MQTT_HOST` | `127.0.0.1` |
+| MQTT 端口 | `EMQX_MQTT_PORT` | `1883` |
+| MQTT 用户名 | `EMQX_MQTT_USERNAME` | 未设置 |
+| MQTT 密码 | `EMQX_MQTT_PASSWORD` | 未设置 |
+| Management API 地址 | `EMQX_HTTP_URL` | `http://127.0.0.1:18083` |
 
-如果 EMQX 启用了认证，可以为 MQTT 接收端设置 `EMQX_MQTT_USERNAME` 和 `EMQX_MQTT_PASSWORD`。
+请求主题为 `/rpc/{vin}/sync_request`，响应主题为 `/rpc/{vin}/sync_response`。请求主题必须与接收端的订阅主题完全一致。
 
 ## 2. 启动请求接收端
 
@@ -68,7 +68,7 @@ python client.py --vin vin01
 - 请求订阅主题：`/rpc/vin01/sync_request`
 - 响应主题：`/rpc/vin01/sync_response`
 
-客户端会随机等待 0.5～4 秒来模拟业务处理。这个时间故意不是命令行参数，以保持首次运行命令简单。
+客户端收到请求后会等待 0.5～4 秒，再发布响应。处理时间超过本次请求的 timeout 时，发起端会收到 `504 TIMEOUT`。
 
 响应端的关键代码是：
 
@@ -90,14 +90,14 @@ client.publish(
 
 ## 3. 配置 API Key 并启动请求发起端
 
-`requester.py` 中保留了两个清晰的配置变量：
+`requester.py` 从以下环境变量读取 API Key 和 Secret Key：
 
 ```python
 API_KEY = os.getenv("EMQX_API_KEY", "replace-with-api-key")
 SECRET_KEY = os.getenv("EMQX_SECRET_KEY", "replace-with-secret-key")
 ```
 
-可以在 Dashboard 的 API Key 页面创建密钥，并将 Scope 设置为 `publish`。推荐通过环境变量提供密钥：
+在 Dashboard 的 API Key 页面创建密钥，并将 Scope 设置为 `publish`。在运行 `requester.py` 的终端中设置密钥：
 
 ```bash
 export EMQX_API_KEY="你的 api-key"
@@ -105,9 +105,9 @@ export EMQX_SECRET_KEY="你的 secret-key"
 python requester.py
 ```
 
-也可以直接修改 `requester.py` 顶部的变量。不要把真实密钥提交到 Git 仓库。环境变量只需在运行 `requester.py` 的终端中设置，运行 `client.py` 的终端不需要 API Key。
+`client.py` 通过 MQTT 连接 EMQX，不使用 Management API Key。如果 MQTT 监听器启用了认证，请设置 `EMQX_MQTT_USERNAME` 和 `EMQX_MQTT_PASSWORD`。
 
-启动后，发起端会持续调用：
+发起端调用以下接口：
 
 ```http
 POST /api/v5/plugin_api/emqx_sync_request/request
@@ -119,7 +119,15 @@ POST /api/v5/plugin_api/emqx_sync_request/request
 python requester.py
 ```
 
-需要向多个 VIN 随机发送时，先为每个 VIN 分别启动一个 `client.py`，然后执行：
+需要向多个 VIN 随机发送时，分别启动对应的 MQTT 客户端：
+
+```bash
+python client.py --vin vin01
+python client.py --vin vin02
+python client.py --vin vin03
+```
+
+每个命令需要在单独的终端运行。客户端全部连接后，执行：
 
 ```bash
 python requester.py --vin_list vin01,vin02,vin03
@@ -153,4 +161,4 @@ python requester.py
 - `UNAUTHORIZED_ROLE`：API Key 没有调用插件 API 所需的 `publish` 权限。
 - `TIMEOUT`：接收端处理时间超过本次随机 timeout，或者响应未发布到请求中的 `Response Topic`。
 
-本示例只用于解释协议和插件调用方式。生产程序还应增加重连策略、日志、业务幂等和更严格的输入校验。
+程序未实现断线重连和业务幂等。将该流程用于实际业务时，需要根据设备协议补充相应处理。
