@@ -19,9 +19,9 @@ REQUEST_API = f"{EMQX_HTTP_URL.rstrip('/')}/api/v5/plugin_api/emqx_sync_request/
 API_KEY = os.getenv("EMQX_API_KEY", "replace-with-api-key")
 SECRET_KEY = os.getenv("EMQX_SECRET_KEY", "replace-with-secret-key")
 
-# 每次请求的 timeout 为 1～5 秒；两次请求之间间隔 1 秒，共发送 10 次。
-REQUEST_TIMEOUT_MIN = 1.0
-REQUEST_TIMEOUT_MAX = 5.0
+# 请求 timeout 始终大于客户端 4 秒的最大处理时间。
+REQUEST_TIMEOUT_MIN = 6.0
+REQUEST_TIMEOUT_MAX = 10.0
 REQUEST_INTERVAL_SECONDS = 1
 REQUEST_COUNT = 10
 HTTP_TIMEOUT_MARGIN_SECONDS = 2

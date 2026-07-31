@@ -9,8 +9,8 @@ requester.py --HTTP API--> EMQX Sync Request --MQTT 5 请求--> client.py
 ```
 
 - `client.py` 是请求接收方。它使用 VIN 作为 MQTT Client ID，连接 MQTT 5，订阅 `/rpc/{vin}/sync_request`，读取请求中的 `Response Topic` 和 `Correlation Data`，然后把处理结果发布到 `/rpc/{vin}/sync_response`。
-- `requester.py` 是请求发起方。它通过 EMQX Management API 调用插件，依次发送 10 个请求，并打印成功响应或 timeout 等错误。
-- 每次请求的 HTTP `timeout` 为 1～5 秒，接收端的处理时间为 0.5～4 秒。处理时间超过 timeout 时，HTTP API 返回 `504 TIMEOUT`。
+- `requester.py` 是请求发起方。它通过 EMQX Management API 调用插件，依次发送 10 个请求，并打印每次响应。
+- 每次请求的 HTTP `timeout` 为 6～10 秒，接收端的处理时间为 0.5～4 秒。请求 timeout 始终大于客户端的最大处理时间。
 
 ## 1. 准备环境
 
@@ -68,7 +68,7 @@ python client.py --vin vin01
 - 请求订阅主题：`/rpc/vin01/sync_request`
 - 响应主题：`/rpc/vin01/sync_response`
 
-客户端收到请求后会等待 0.5～4 秒，再发布响应。处理时间超过本次请求的 timeout 时，发起端会收到 `504 TIMEOUT`。
+客户端收到请求后会等待 0.5～4 秒，再发布响应。
 
 响应端的关键代码是：
 
@@ -113,7 +113,7 @@ python requester.py
 POST /api/v5/plugin_api/emqx_sync_request/request
 ```
 
-每次请求的 `timeout` 会在 1～5 秒之间随机变化。发起端默认使用 `vin01`，每次 HTTP 返回后等待 1 秒，再发送下一个请求，共发送 10 次。HTTP 客户端的网络 timeout 会比插件 timeout 多 2 秒，用来给 EMQX 返回 `504 TIMEOUT` 留出时间；真正的业务 timeout 由请求体中的 `timeout` 控制。
+每次请求的 `timeout` 会在 6～10 秒之间随机变化。发起端默认使用 `vin01`，每次 HTTP 返回后等待 1 秒，再发送下一个请求，共发送 10 次。HTTP 客户端的网络 timeout 比插件 timeout 多 2 秒；插件 timeout 由请求体中的 `timeout` 控制。
 
 ```bash
 python requester.py
@@ -133,14 +133,6 @@ python client.py --vin vin03
 python requester.py --vin_list vin01,vin02,vin03
 ```
 
-如果随机业务处理时间超过本次 timeout，发起端会看到类似结果：
-
-```text
-2026-07-31 12:00:01 WARNING failed status=504 code=TIMEOUT message=timeout
-```
-
-这不是 MQTT 连接断开，而是插件在指定等待时间内没有收到匹配的响应。接收端稍后发布的响应会被忽略，因为原请求已经结束。
-
 ## 4. 运行顺序和常见问题
 
 建议按以下顺序操作：
@@ -159,6 +151,6 @@ python requester.py
 - `CONFLICT`：同一请求主题存在多个精确订阅者，或使用了共享订阅。
 - `BAD_API_KEY_OR_SECRET`：API Key 或 Secret Key 不正确。
 - `UNAUTHORIZED_ROLE`：API Key 没有调用插件 API 所需的 `publish` 权限。
-- `TIMEOUT`：接收端处理时间超过本次随机 timeout，或者响应未发布到请求中的 `Response Topic`。
+- `TIMEOUT`：接收端未在 timeout 内回复，或者响应未发布到请求中的 `Response Topic`。
 
 程序未实现断线重连和业务幂等。将该流程用于实际业务时，需要根据设备协议补充相应处理。

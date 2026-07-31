@@ -75,7 +75,7 @@ def on_message(client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
     except (UnicodeDecodeError, json.JSONDecodeError):
         request = {"raw_payload": message.payload.decode("utf-8", errors="replace")}
 
-    # 处理时间超过请求的 timeout 时，HTTP API 会返回 504 TIMEOUT。
+    # 随机等待表示收到请求后的业务处理过程。
     delay = random.uniform(PROCESSING_DELAY_MIN, PROCESSING_DELAY_MAX)
     logging.info(
         "received topic=%s correlation_data=%r payload=%s; processing %.2fs",
