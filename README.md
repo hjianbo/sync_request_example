@@ -9,7 +9,7 @@ requester.py --HTTP API--> EMQX Sync Request --MQTT 5 请求--> client.py
 ```
 
 - `client.py` 是请求接收方。它使用 VIN 作为 MQTT Client ID，连接 MQTT 5，订阅 `/rpc/{vin}/sync_request`，读取请求中的 `Response Topic` 和 `Correlation Data`，然后把处理结果发布到 `/rpc/{vin}/sync_response`。
-- `requester.py` 是请求发起方。它通过 EMQX Management API 调用插件，持续发送请求，并打印成功响应或 timeout 等错误。
+- `requester.py` 是请求发起方。它通过 EMQX Management API 调用插件，依次发送 10 个请求，并打印成功响应或 timeout 等错误。
 - 每次请求的 HTTP `timeout` 会在指定范围内随机选择；接收端也会随机等待一段时间来模拟业务处理，因此可以观察成功和 `504 TIMEOUT` 两种结果。
 
 ## 1. 准备环境
@@ -62,11 +62,7 @@ python client.py --vin vin01
 - 请求订阅主题：`/rpc/vin01/sync_request`
 - 响应主题：`/rpc/vin01/sync_response`
 
-可通过环境变量调整随机处理时间：
-
-```bash
-RESPONSE_DELAY_MIN=0.2 RESPONSE_DELAY_MAX=8 python client.py --vin vin01
-```
+客户端会随机等待 0.5～4 秒来模拟业务处理。这个时间故意不是命令行参数，以保持首次运行命令简单。
 
 响应端的关键代码是：
 
@@ -84,7 +80,7 @@ client.publish(
 )
 ```
 
-示例同时把 `CorrelationData` 原样放回响应的 MQTT 5 属性中。插件会使用响应主题和 correlation data 匹配请求。
+`Response Topic` 由请求发起端设置为 `/rpc/{vin}/sync_response`。客户端回复时使用请求携带的 `Response Topic`，并把 `Correlation Data` 原样带回；插件使用这两个属性匹配原请求。
 
 ## 3. 配置 API Key 并启动请求发起端
 
@@ -111,17 +107,22 @@ python requester.py --vin_list vin01,vin02,vin03
 POST /api/v5/plugin_api/emqx_sync_request/request
 ```
 
-每次请求的 `timeout` 会随机变化。发起端每隔 1 秒随机选择一个 VIN，默认发送 10 次；每次都会等待 HTTP 返回后，才开始下一次请求。HTTP 客户端的网络 timeout 会比插件 timeout 多 2 秒，用来给 EMQX 返回 `504 TIMEOUT` 留出时间；真正的业务 timeout 由请求体中的 `timeout` 控制。
+每次请求的 `timeout` 会在 1～5 秒之间随机变化。发起端默认使用 `vin01`，每次 HTTP 返回后等待 1 秒，再发送下一个请求，共发送 10 次。HTTP 客户端的网络 timeout 会比插件 timeout 多 2 秒，用来给 EMQX 返回 `504 TIMEOUT` 留出时间；真正的业务 timeout 由请求体中的 `timeout` 控制。
 
 ```bash
-REQUEST_TIMEOUT_MIN=1 REQUEST_TIMEOUT_MAX=5 python requester.py --vin_list vin01,vin02,vin03 --count 10
+python requester.py
+```
+
+需要向多个 VIN 随机发送时，先为每个 VIN 分别启动一个 `client.py`，然后执行：
+
+```bash
+python requester.py --vin_list vin01,vin02,vin03
 ```
 
 如果随机业务处理时间超过本次 timeout，发起端会看到类似结果：
 
 ```text
-[12:00:01] request ... timeout=2s
-  -> TIMEOUT: timeout
+2026-07-31 12:00:01 WARNING failed status=504 code=TIMEOUT message=timeout
 ```
 
 这不是 MQTT 连接断开，而是插件在指定等待时间内没有收到匹配的响应。接收端稍后发布的响应会被忽略，因为原请求已经结束。
@@ -135,7 +136,7 @@ cd sync_request_example
 source .venv/bin/activate
 python client.py --vin vin01
 # 另开一个终端
-python requester.py --vin_list vin01,vin02,vin03
+python requester.py
 ```
 
 常见错误：

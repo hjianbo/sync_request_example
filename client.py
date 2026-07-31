@@ -1,4 +1,4 @@
-"""MQTT 5 request client for the emqx_sync_request beginner demo."""
+"""通过 MQTT 5 接收并回复 emqx_sync_request 请求。"""
 
 import argparse
 import json
@@ -17,13 +17,31 @@ MQTT_HOST = os.getenv("EMQX_MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("EMQX_MQTT_PORT", "1883"))
 MQTT_USERNAME = os.getenv("EMQX_MQTT_USERNAME")
 MQTT_PASSWORD = os.getenv("EMQX_MQTT_PASSWORD")
-RESPONSE_DELAY_MIN = float(os.getenv("RESPONSE_DELAY_MIN", "0.5"))
-RESPONSE_DELAY_MAX = float(os.getenv("RESPONSE_DELAY_MAX", "4.0"))
+# 随机处理时间用于演示正常响应和超时，不需要通过命令行配置。
+RESPONSE_DELAY_MIN = 0.5
+RESPONSE_DELAY_MAX = 4.0
+
+
+def validate_vin(value: str) -> str:
+    """校验 VIN，避免生成无效或非预期的 MQTT 主题。"""
+    vin = value.strip()
+    if (
+        not vin
+        or any(char in vin for char in "/+#")
+        or any(char.isspace() for char in vin)
+    ):
+        raise argparse.ArgumentTypeError("VIN 不能为空，也不能包含空白字符、/、+ 或 #")
+    return vin
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="emqx_sync_request MQTT 5 请求接收客户端")
-    parser.add_argument("--vin", required=True, help="设备 VIN，同时作为 MQTT Client ID")
+    parser.add_argument(
+        "--vin",
+        required=True,
+        type=validate_vin,
+        help="设备 VIN，同时作为 MQTT Client ID，例如 vin01",
+    )
     return parser.parse_args()
 
 
@@ -32,6 +50,7 @@ def on_connect(client: mqtt.Client, userdata, _flags, reason_code, _properties=N
         logging.error("MQTT connect failed: %s", reason_code)
         return
     request_topic = userdata["request_topic"]
+    # Sync Request 只会投递给请求主题的唯一精确订阅者。
     result, _ = client.subscribe(request_topic, qos=1)
     if result != mqtt.MQTT_ERR_SUCCESS:
         logging.error("subscribe failed: %s", mqtt.error_string(result))
@@ -41,6 +60,7 @@ def on_connect(client: mqtt.Client, userdata, _flags, reason_code, _properties=N
 
 def on_message(client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
     properties = message.properties
+    # Response Topic 告诉客户端回复到哪里；Correlation Data 用于匹配原请求。
     response_topic = getattr(properties, "ResponseTopic", None)
     correlation_data = getattr(properties, "CorrelationData", None)
 
@@ -70,6 +90,7 @@ def on_message(client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
         "request": request,
         "processing_seconds": round(delay, 3),
     }
+    # 回复时必须原样带回 Correlation Data。
     response_properties = Properties(PacketTypes.PUBLISH)
     response_properties.CorrelationData = correlation_data
     response_properties.ContentType = "application/json"
@@ -79,8 +100,11 @@ def on_message(client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
         qos=message.qos,
         properties=response_properties,
     )
-    info.wait_for_publish()
-    logging.info("published response topic=%s mid=%s", response_topic, info.mid)
+    if info.rc == mqtt.MQTT_ERR_SUCCESS:
+        # on_message 运行在 MQTT 网络线程中，不能在这里同步等待 PUBACK。
+        logging.info("response queued topic=%s mid=%s", response_topic, info.mid)
+    else:
+        logging.error("publish failed: %s", mqtt.error_string(info.rc))
 
 
 def main():

@@ -1,4 +1,4 @@
-"""HTTP request initiator for the emqx_sync_request beginner demo."""
+"""通过 HTTP API 持续发起 emqx_sync_request 请求。"""
 
 import argparse
 import base64
@@ -15,37 +15,54 @@ import requests
 EMQX_HTTP_URL = os.getenv("EMQX_HTTP_URL", "http://127.0.0.1:18083")
 REQUEST_API = f"{EMQX_HTTP_URL.rstrip('/')}/api/v5/plugin_api/emqx_sync_request/request"
 
-# Keep these as obvious variables for beginners. Prefer environment variables
-# so that API credentials do not need to be committed to source control.
+# 推荐使用环境变量，避免把真实 API 凭据提交到代码仓库。
 API_KEY = os.getenv("EMQX_API_KEY", "replace-with-api-key")
 SECRET_KEY = os.getenv("EMQX_SECRET_KEY", "replace-with-secret-key")
 
-REQUEST_TIMEOUT_MIN = float(os.getenv("REQUEST_TIMEOUT_MIN", "1"))
-REQUEST_TIMEOUT_MAX = float(os.getenv("REQUEST_TIMEOUT_MAX", "5"))
+# 这些是演示行为，不作为命令行参数暴露给初学者。
+REQUEST_TIMEOUT_MIN = 1.0
+REQUEST_TIMEOUT_MAX = 5.0
 REQUEST_INTERVAL = 1
+REQUEST_COUNT = 10
+
+
+def validate_vin(vin: str) -> str:
+    """校验 VIN，避免生成无效或非预期的 MQTT 主题。"""
+    vin = vin.strip()
+    if (
+        not vin
+        or any(char in vin for char in "/+#")
+        or any(char.isspace() for char in vin)
+    ):
+        raise argparse.ArgumentTypeError(
+            f"无效 VIN {vin!r}：不能包含空白字符、/、+ 或 #"
+        )
+    return vin
+
+
+def parse_vin_list(value: str) -> list[str]:
+    vins = [validate_vin(vin) for vin in value.split(",") if vin.strip()]
+    if not vins:
+        raise argparse.ArgumentTypeError("VIN 列表不能为空")
+    return vins
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="emqx_sync_request HTTP 请求发起端")
     parser.add_argument(
         "--vin_list",
-        default="vin01,vin02,vin03",
-        help="VIN 列表，使用逗号分隔，默认：vin01,vin02,vin03",
+        type=parse_vin_list,
+        default=["vin01"],
+        help="逗号分隔的 VIN 列表，默认：vin01",
     )
-    parser.add_argument("--count", type=int, default=10, help="请求次数，默认：10")
-    args = parser.parse_args()
-    args.vin_list = [vin.strip() for vin in args.vin_list.split(",") if vin.strip()]
-    if not args.vin_list:
-        parser.error("--vin_list 不能为空")
-    if args.count < 1:
-        parser.error("--count 必须大于 0")
-    return args
+    return parser.parse_args()
 
 
 def send_request(http: requests.Session, vin: str, timeout_seconds: float):
     request_id = uuid.uuid4().hex
     request_topic = f"/rpc/{vin}/sync_request"
     response_topic = f"/rpc/{vin}/sync_response"
+    # request_id 会被插件转换为 MQTT 5 Correlation Data。
     body = {
         "timeout": f"{timeout_seconds:.1f}s",
         "request": {
@@ -69,7 +86,7 @@ def send_request(http: requests.Session, vin: str, timeout_seconds: float):
         timeout_seconds,
     )
     try:
-        # Add a small margin so the HTTP client can receive the plugin's 504.
+        # HTTP 客户端多等待 2 秒，确保能收到插件返回的 504 TIMEOUT。
         result = http.post(
             REQUEST_API,
             json=body,
@@ -85,8 +102,14 @@ def send_request(http: requests.Session, vin: str, timeout_seconds: float):
         result_body = {"raw": result.text}
 
     if result.ok:
-        response = result_body["response"]
-        payload = base64.b64decode(response["payload"]).decode("utf-8", errors="replace")
+        try:
+            response = result_body["response"]
+            payload = base64.b64decode(response["payload"]).decode(
+                "utf-8", errors="replace"
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            logging.error("unexpected success response: %s (%s)", result_body, error)
+            return
         logging.info("success status=%s response=%s", result.status_code, payload)
     else:
         logging.warning(
@@ -105,12 +128,12 @@ def main():
 
     with requests.Session() as http:
         http.auth = (API_KEY, SECRET_KEY)
-        for index in range(args.count):
+        for index in range(REQUEST_COUNT):
             vin = random.choice(args.vin_list)
             timeout_seconds = random.uniform(REQUEST_TIMEOUT_MIN, REQUEST_TIMEOUT_MAX)
-            # send_request blocks until HTTP returns; only then choose the next VIN.
+            # send_request 会阻塞到 HTTP 返回，之后才会选择下一个 VIN。
             send_request(http, vin, round(timeout_seconds, 1))
-            if index + 1 < args.count:
+            if index + 1 < REQUEST_COUNT:
                 time.sleep(REQUEST_INTERVAL)
 
 
