@@ -28,6 +28,12 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
+如果 Ubuntu 提示 `ensurepip is not available`，先安装虚拟环境组件，再重新执行上述命令：
+
+```bash
+sudo apt install python3-venv
+```
+
 默认连接参数如下：
 
 | 参数 | 默认值 | 用途 |
@@ -91,15 +97,15 @@ API_KEY = os.getenv("EMQX_API_KEY", "replace-with-api-key")
 SECRET_KEY = os.getenv("EMQX_SECRET_KEY", "replace-with-secret-key")
 ```
 
-推荐通过环境变量提供密钥：
+可以在 Dashboard 的 API Key 页面创建密钥，并将 Scope 设置为 `publish`。推荐通过环境变量提供密钥：
 
 ```bash
 export EMQX_API_KEY="你的 api-key"
 export EMQX_SECRET_KEY="你的 secret-key"
-python requester.py --vin_list vin01,vin02,vin03
+python requester.py
 ```
 
-也可以直接修改 `requester.py` 顶部的变量。不要把真实密钥提交到 Git 仓库。
+也可以直接修改 `requester.py` 顶部的变量。不要把真实密钥提交到 Git 仓库。环境变量只需在运行 `requester.py` 的终端中设置，运行 `client.py` 的终端不需要 API Key。
 
 启动后，发起端会持续调用：
 

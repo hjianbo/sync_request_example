@@ -112,11 +112,14 @@ def send_request(http: requests.Session, vin: str, timeout_seconds: float):
             return
         logging.info("success status=%s response=%s", result.status_code, payload)
     else:
+        # 不同插件版本使用 code/message 或 status/reason 表示错误。
+        error_code = result_body.get("code", result_body.get("status"))
+        error_message = result_body.get("message", result_body.get("reason"))
         logging.warning(
             "failed status=%s code=%s message=%s",
             result.status_code,
-            result_body.get("code"),
-            result_body.get("message"),
+            error_code,
+            error_message,
         )
 
 
