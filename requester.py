@@ -1,5 +1,6 @@
 """HTTP request initiator for the emqx_sync_request beginner demo."""
 
+import argparse
 import base64
 import json
 import logging
@@ -19,32 +20,54 @@ REQUEST_API = f"{EMQX_HTTP_URL.rstrip('/')}/api/v5/plugin_api/emqx_sync_request/
 API_KEY = os.getenv("EMQX_API_KEY", "replace-with-api-key")
 SECRET_KEY = os.getenv("EMQX_SECRET_KEY", "replace-with-secret-key")
 
-REQUEST_TOPIC = os.getenv("REQUEST_TOPIC", "demo/sync-request/request")
-RESPONSE_TOPIC_PREFIX = os.getenv("RESPONSE_TOPIC_PREFIX", "demo/sync-request/response")
 REQUEST_TIMEOUT_MIN = float(os.getenv("REQUEST_TIMEOUT_MIN", "1"))
 REQUEST_TIMEOUT_MAX = float(os.getenv("REQUEST_TIMEOUT_MAX", "5"))
-REQUEST_INTERVAL = float(os.getenv("REQUEST_INTERVAL", "2"))
+REQUEST_INTERVAL = 1
 
 
-def send_request(http: requests.Session, timeout_seconds: float):
+def parse_args():
+    parser = argparse.ArgumentParser(description="emqx_sync_request HTTP 请求发起端")
+    parser.add_argument(
+        "--vin_list",
+        default="vin01,vin02,vin03",
+        help="VIN 列表，使用逗号分隔，默认：vin01,vin02,vin03",
+    )
+    parser.add_argument("--count", type=int, default=10, help="请求次数，默认：10")
+    args = parser.parse_args()
+    args.vin_list = [vin.strip() for vin in args.vin_list.split(",") if vin.strip()]
+    if not args.vin_list:
+        parser.error("--vin_list 不能为空")
+    if args.count < 1:
+        parser.error("--count 必须大于 0")
+    return args
+
+
+def send_request(http: requests.Session, vin: str, timeout_seconds: float):
     request_id = uuid.uuid4().hex
-    response_topic = f"{RESPONSE_TOPIC_PREFIX}/{request_id}"
+    request_topic = f"/rpc/{vin}/sync_request"
+    response_topic = f"/rpc/{vin}/sync_response"
     body = {
         "timeout": f"{timeout_seconds:.1f}s",
         "request": {
-            "topic": REQUEST_TOPIC,
+            "topic": request_topic,
             "response_topic": response_topic,
             "request_id": request_id,
             "qos": 1,
             "payload_encoding": "plain",
             "payload": json.dumps(
-                {"command": "read-temperature", "request_id": request_id},
+                {"command": "read-temperature", "vin": vin, "request_id": request_id},
                 ensure_ascii=False,
             ),
             "content_type": "application/json",
         },
     }
-    logging.info("request id=%s timeout=%ss", request_id, timeout_seconds)
+    logging.info(
+        "request vin=%s topic=%s id=%s timeout=%ss",
+        vin,
+        request_topic,
+        request_id,
+        timeout_seconds,
+    )
     try:
         # Add a small margin so the HTTP client can receive the plugin's 504.
         result = http.post(
@@ -75,16 +98,20 @@ def send_request(http: requests.Session, timeout_seconds: float):
 
 
 def main():
+    args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if API_KEY.startswith("replace-") or SECRET_KEY.startswith("replace-"):
         raise SystemExit("请先设置 EMQX_API_KEY 和 EMQX_SECRET_KEY")
 
     with requests.Session() as http:
         http.auth = (API_KEY, SECRET_KEY)
-        while True:
+        for index in range(args.count):
+            vin = random.choice(args.vin_list)
             timeout_seconds = random.uniform(REQUEST_TIMEOUT_MIN, REQUEST_TIMEOUT_MAX)
-            send_request(http, round(timeout_seconds, 1))
-            time.sleep(REQUEST_INTERVAL)
+            # send_request blocks until HTTP returns; only then choose the next VIN.
+            send_request(http, vin, round(timeout_seconds, 1))
+            if index + 1 < args.count:
+                time.sleep(REQUEST_INTERVAL)
 
 
 if __name__ == "__main__":

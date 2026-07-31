@@ -3,12 +3,12 @@
 这个目录用两个 Python 程序演示 `emqx_sync_request` 的完整流程：
 
 ```text
-requester.py --HTTP API--> EMQX Sync Request --MQTT 5 请求--> responder.py
+requester.py --HTTP API--> EMQX Sync Request --MQTT 5 请求--> client.py
        ^                                                   |
        +------------------- MQTT 5 响应 ------------------+
 ```
 
-- `responder.py` 是请求接收方。它使用 MQTT 5 连接 EMQX，订阅请求主题，读取请求中的 `Response Topic` 和 `Correlation Data`，然后把处理结果发布到响应主题。
+- `client.py` 是请求接收方。它使用 VIN 作为 MQTT Client ID，连接 MQTT 5，订阅 `/rpc/{vin}/sync_request`，读取请求中的 `Response Topic` 和 `Correlation Data`，然后把处理结果发布到 `/rpc/{vin}/sync_response`。
 - `requester.py` 是请求发起方。它通过 EMQX Management API 调用插件，持续发送请求，并打印成功响应或 timeout 等错误。
 - 每次请求的 HTTP `timeout` 会在指定范围内随机选择；接收端也会随机等待一段时间来模拟业务处理，因此可以观察成功和 `504 TIMEOUT` 两种结果。
 
@@ -35,8 +35,8 @@ python -m pip install -r requirements.txt
 | MQTT 主机 | `127.0.0.1` | 接收端连接地址 |
 | MQTT 端口 | `1883` | MQTT TCP 监听端口 |
 | HTTP 地址 | `http://127.0.0.1:18083` | EMQX Dashboard / Management API |
-| 请求主题 | `demo/sync-request/request` | 必须与接收端订阅主题完全一致 |
-| 响应主题前缀 | `demo/sync-request/response` | 每个请求会追加唯一 request ID |
+| 请求主题 | `/rpc/{vin}/sync_request` | 由 VIN 决定，必须与接收端订阅主题完全一致 |
+| 响应主题 | `/rpc/{vin}/sync_response` | 由 VIN 决定 |
 
 如果 EMQX 启用了认证，可以为 MQTT 接收端设置 `EMQX_MQTT_USERNAME` 和 `EMQX_MQTT_PASSWORD`。
 
@@ -45,7 +45,7 @@ python -m pip install -r requirements.txt
 先启动接收端。它必须是请求主题的唯一、非共享订阅者，这是插件的路由要求：
 
 ```bash
-python responder.py
+python client.py --vin vin01
 ```
 
 接收端收到请求后会打印：
@@ -56,10 +56,16 @@ python responder.py
 4. 模拟业务处理耗时；
 5. 发布响应。
 
+`--vin` 同时用于：
+
+- MQTT Client ID：`vin01`
+- 请求订阅主题：`/rpc/vin01/sync_request`
+- 响应主题：`/rpc/vin01/sync_response`
+
 可通过环境变量调整随机处理时间：
 
 ```bash
-RESPONSE_DELAY_MIN=0.2 RESPONSE_DELAY_MAX=8 python responder.py
+RESPONSE_DELAY_MIN=0.2 RESPONSE_DELAY_MAX=8 python client.py --vin vin01
 ```
 
 响应端的关键代码是：
@@ -94,7 +100,7 @@ SECRET_KEY = os.getenv("EMQX_SECRET_KEY", "replace-with-secret-key")
 ```bash
 export EMQX_API_KEY="你的 api-key"
 export EMQX_SECRET_KEY="你的 secret-key"
-python requester.py
+python requester.py --vin_list vin01,vin02,vin03
 ```
 
 也可以直接修改 `requester.py` 顶部的变量。不要把真实密钥提交到 Git 仓库。
@@ -105,10 +111,10 @@ python requester.py
 POST /api/v5/plugin_api/emqx_sync_request/request
 ```
 
-每次请求的 `timeout` 会随机变化。HTTP 客户端的网络 timeout 会比插件 timeout 多 2 秒，用来给 EMQX 返回 `504 TIMEOUT` 留出时间；真正的业务 timeout 由请求体中的 `timeout` 控制。
+每次请求的 `timeout` 会随机变化。发起端每隔 1 秒随机选择一个 VIN，默认发送 10 次；每次都会等待 HTTP 返回后，才开始下一次请求。HTTP 客户端的网络 timeout 会比插件 timeout 多 2 秒，用来给 EMQX 返回 `504 TIMEOUT` 留出时间；真正的业务 timeout 由请求体中的 `timeout` 控制。
 
 ```bash
-REQUEST_TIMEOUT_MIN=1 REQUEST_TIMEOUT_MAX=5 REQUEST_INTERVAL=1 python requester.py
+REQUEST_TIMEOUT_MIN=1 REQUEST_TIMEOUT_MAX=5 python requester.py --vin_list vin01,vin02,vin03 --count 10
 ```
 
 如果随机业务处理时间超过本次 timeout，发起端会看到类似结果：
@@ -125,11 +131,11 @@ REQUEST_TIMEOUT_MIN=1 REQUEST_TIMEOUT_MAX=5 REQUEST_INTERVAL=1 python requester.
 建议按以下顺序操作：
 
 ```bash
-cd examples/python
+cd sync_request_example
 source .venv/bin/activate
-python responder.py
+python client.py --vin vin01
 # 另开一个终端
-python requester.py
+python requester.py --vin_list vin01,vin02,vin03
 ```
 
 常见错误：

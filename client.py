@@ -1,40 +1,45 @@
-"""MQTT 5 request responder for the emqx_sync_request beginner demo."""
+"""MQTT 5 request client for the emqx_sync_request beginner demo."""
 
+import argparse
 import json
 import logging
 import os
 import random
 import signal
 import time
-import uuid
 
 import paho.mqtt.client as mqtt
-from paho.mqtt.properties import Properties
 from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.properties import Properties
 
 
 MQTT_HOST = os.getenv("EMQX_MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("EMQX_MQTT_PORT", "1883"))
 MQTT_USERNAME = os.getenv("EMQX_MQTT_USERNAME")
 MQTT_PASSWORD = os.getenv("EMQX_MQTT_PASSWORD")
-REQUEST_TOPIC = os.getenv("REQUEST_TOPIC", "demo/sync-request/request")
-CLIENT_ID = os.getenv("RESPONDER_CLIENT_ID", f"python-responder-{uuid.uuid4().hex[:8]}")
 RESPONSE_DELAY_MIN = float(os.getenv("RESPONSE_DELAY_MIN", "0.5"))
 RESPONSE_DELAY_MAX = float(os.getenv("RESPONSE_DELAY_MAX", "4.0"))
 
 
-def on_connect(client: mqtt.Client, _userdata, _flags, reason_code, _properties=None):
+def parse_args():
+    parser = argparse.ArgumentParser(description="emqx_sync_request MQTT 5 请求接收客户端")
+    parser.add_argument("--vin", required=True, help="设备 VIN，同时作为 MQTT Client ID")
+    return parser.parse_args()
+
+
+def on_connect(client: mqtt.Client, userdata, _flags, reason_code, _properties=None):
     if reason_code != 0:
         logging.error("MQTT connect failed: %s", reason_code)
         return
-    result, _ = client.subscribe(REQUEST_TOPIC, qos=1)
+    request_topic = userdata["request_topic"]
+    result, _ = client.subscribe(request_topic, qos=1)
     if result != mqtt.MQTT_ERR_SUCCESS:
         logging.error("subscribe failed: %s", mqtt.error_string(result))
         return
-    logging.info("connected; subscribed to %s", REQUEST_TOPIC)
+    logging.info("connected; subscribed to %s", request_topic)
 
 
-def on_message(client: mqtt.Client, _userdata, message: mqtt.MQTTMessage):
+def on_message(client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
     properties = message.properties
     response_topic = getattr(properties, "ResponseTopic", None)
     correlation_data = getattr(properties, "CorrelationData", None)
@@ -61,6 +66,7 @@ def on_message(client: mqtt.Client, _userdata, message: mqtt.MQTTMessage):
     result = {
         "ok": True,
         "message": "response from Python MQTT 5 client",
+        "vin": userdata["vin"],
         "request": request,
         "processing_seconds": round(delay, 3),
     }
@@ -78,11 +84,14 @@ def on_message(client: mqtt.Client, _userdata, message: mqtt.MQTTMessage):
 
 
 def main():
+    args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    request_topic = f"/rpc/{args.vin}/sync_request"
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-        client_id=CLIENT_ID,
+        client_id=args.vin,
         protocol=mqtt.MQTTv5,
+        userdata={"vin": args.vin, "request_topic": request_topic},
     )
     if MQTT_USERNAME:
         client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD or "")
@@ -96,7 +105,12 @@ def main():
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
-    logging.info("starting responder client_id=%s", CLIENT_ID)
+    logging.info(
+        "starting client_id=%s request_topic=%s response_topic=/rpc/%s/sync_response",
+        args.vin,
+        request_topic,
+        args.vin,
+    )
     client.loop_forever()
 
 
